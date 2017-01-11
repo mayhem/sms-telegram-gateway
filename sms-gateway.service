@@ -1,0 +1,12 @@
+[Unit]
+Description=SMS <-> Telegram Gateway service
+After=multi-user.target
+
+[Service]
+Type=idle
+ExecStart=/usr/bin/python /home/robert/sms-telegram-gateway/sms-fona.py 
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

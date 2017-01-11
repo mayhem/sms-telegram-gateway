@@ -114,6 +114,7 @@ class SMS(object):
         else:
             # TODO: Split messages 
             bot.sendMessage(config.CHAT_ID, text="You suck. Invalid message format, yo! Use <ES mobile number>: <message>")
+            bot.sendMessage(config.CHAT_ID, text="you said: '%s'" % msg)
 
     def run(self):
         next_id = None
@@ -135,7 +136,12 @@ class SMS(object):
                 if self.new_messages:
                     self.process_messages()
 
-                updates = bot.getUpdates(offset=next_id)
+                try:
+                    updates = bot.getUpdates(offset=next_id)
+                except telegram.TelegramError as e:
+                    print "Telegram error: ", str(e)
+                except Exception as e:
+                    print "general error: ", str(e)
                 for u in updates:
                     self.handle_telegram_message(u.message.text)
                     next_id = u.update_id + 1
