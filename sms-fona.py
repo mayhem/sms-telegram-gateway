@@ -70,6 +70,7 @@ class SMS(object):
                     sender = data[2][1:-1]
                     dt = data[4][1:] + " " + data[5][0:-1]
                     msg = self.ser.readline()
+                    msg = msg.decode('iso-8859-1',errors='replace').encode('utf8')
                     logging.info("S> %s, %s, %s: %s" % (index, sender, dt, msg))
 
                     try:
