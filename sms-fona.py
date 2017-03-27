@@ -42,6 +42,15 @@ class SMS(object):
     def set_bot(self, bot):
         self.bot = bot
 
+    def decode_msg(self, msg):
+        try:
+            msg = msg.strip()
+            return msg.decode('hex')
+        except TypeError:
+            pass
+
+        return msg.decode('iso-8859-1',errors='replace').encode('utf8')
+
     def process_messages(self):
         if not self.bot:
             logging.info("Not connected to Telegram, skipping catch up.")
@@ -49,6 +58,10 @@ class SMS(object):
 
         stored_cmds = []
         new_messages = True
+
+        self.ser.write('AT+CMGF=1\n')
+        self.wait_for()
+
         self.ser.write('AT+CMGL="ALL"\n')
         self.new_messages = False
         while new_messages:
@@ -69,8 +82,7 @@ class SMS(object):
                     cmd, index = data[0].split(' ')
                     sender = data[2][1:-1]
                     dt = data[4][1:] + " " + data[5][0:-1]
-                    msg = self.ser.readline()
-                    msg = msg.decode('iso-8859-1',errors='replace').encode('utf8')
+                    msg = self.decode_msg(self.ser.readline())
                     logging.info("S> %s, %s, %s: %s" % (index, sender, dt, msg))
 
                     try:
