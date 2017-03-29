@@ -45,7 +45,7 @@ class SMS(object):
     def decode_msg(self, msg):
         try:
             msg = msg.strip()
-            return msg.decode('hex')
+            return msg.decode('hex').decode('iso-8859-1',errors='replace').encode('utf-8')
         except TypeError:
             pass
 
@@ -83,6 +83,7 @@ class SMS(object):
                     sender = data[2][1:-1]
                     dt = data[4][1:] + " " + data[5][0:-1]
                     msg = self.decode_msg(self.ser.readline())
+                    print msg
                     logging.info("S> %s, %s, %s: %s" % (index, sender, dt, msg))
 
                     try:
