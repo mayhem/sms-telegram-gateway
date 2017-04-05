@@ -4,43 +4,41 @@ import sys
 import os
 import re
 import logging
-
+import threading
 import serial
 import telegram
-from time import sleep
+from time import sleep, time
 import config
+from Queue import Queue, Empty
 
 #TODO: If a message cannot be relayed, email results.
 
 MODEM_DEVICE = "/dev/ttyS0"
 BAUD_RATE = 115200
 
-class SMS(object):
-    def __init(self):
+class SMSModem(threading.Thread):
+
+    def __init__(self):
+        super(SMSModem, self).__init__()
         self.ser = None
         self.bot = None
+        self.exit = False
+        self.new_messages = False
+        self.in_q = Queue()
 
-    def open(self):
+    def open(self, device, baud_rate):
         try:
-            self.ser = self.ser = serial.Serial(MODEM_DEVICE,
-                BAUD_RATE, 
+            self.ser = self.ser = serial.Serial(device,
+                baud_rate, 
                 bytesize=serial.EIGHTBITS, 
                 parity=serial.PARITY_NONE, 
                 stopbits=serial.STOPBITS_ONE,
-                timeout=1)
+                timeout=.1)
         except serial.serialutil.SerialException as e:
-            logging.error("Cannot open serial port to Fona 800. " + str(e))
+            log.error("Cannot open serial port to Fona 800. " + str(e))
             return False
 
-        self.ser.write("\nAT\n")
-        self.wait_for()
-
-        logging.info("Modem ready for communication!")
-
         return True
-
-    def set_bot(self, bot):
-        self.bot = bot
 
     def decode_msg(self, msg):
         try:
@@ -51,9 +49,53 @@ class SMS(object):
 
         return msg.decode('iso-8859-1',errors='replace').encode('utf8')
 
+    def next_message(self):
+        try:
+            return self.in_q.get()
+        except Empty:
+            return None
+
+    def send_message(self, msg):
+        log.info("write:%s" % msg)
+        self.ser.write(msg + "\n")
+
+    def stop(self):
+        self.exit = True
+
+    def run(self):
+        line = ""
+        while not self.exit:
+            ch = self.ser.read(1)
+            if not ch:
+                if line:
+                    self.in_q.put(line)
+                    line = ""
+                continue
+
+            if ch == '\r':
+                continue
+
+            if ch == '\n':
+                self.in_q.put(line)
+                line = ""
+                continue
+
+            line += ch
+
+        log.info("end thread")
+
+
+class SMS(object):
+
+    def __init__(self):
+        self.modem = SMSModem()
+
+    def set_bot(self, bot):
+        self.bot = bot
+
     def process_messages(self):
         if not self.bot:
-            logging.info("Not connected to Telegram, skipping catch up.")
+            log.info("Not connected to Telegram, skipping catch up.")
             return
 
         stored_cmds = []
@@ -69,10 +111,10 @@ class SMS(object):
             while True:
                 line = self.ser.readline()
                 if not line:
-                    logging.error("timeout, process messages")
+                    log.error("timeout, process messages")
                     break
                 line = line.strip()
-                logging.info("r>%s" % line)
+                log.info("r>%s" % line)
 
                 if line.startswith("OK"):
                     break
@@ -83,14 +125,13 @@ class SMS(object):
                     sender = data[2][1:-1]
                     dt = data[4][1:] + " " + data[5][0:-1]
                     msg = self.decode_msg(self.ser.readline())
-                    print msg
-                    logging.info("S> %s, %s, %s: %s" % (index, sender, dt, msg))
+                    log.info("S> %s, %s, %s: %s" % (index, sender, dt, msg))
 
                     try:
                         bot.sendMessage(chat_id=config.CHAT_ID, text="%s @ %s\n%s" % (sender, dt, msg))
                         stored_cmds.append('AT+CMGD=%s\n' % index)
                     except telegram.TelegramError as e:
-                        logging.error("Cannot send message to telegram." + str(e))
+                        log.error("Cannot send message to telegram." + str(e))
 
                 if line.startswith("+CMTI:"):
                     new_messages = True
@@ -99,51 +140,70 @@ class SMS(object):
                 self.ser.write(cmd)
                 self.wait_for()
 
-    def wait_for(self, str="OK"):
+    def send_message(self, msg):
+        self.modem.send_message(msg)
+
+    def next_message(self):
         while True:
-            line = self.ser.readline()
-            if not line:
-                logging.error("receive timeout, wait for" + str)
-                return False
-            line = line.strip()
-            logging.info("w>%s" % line)
-
-            if line.startswith("+CMTI:"):
+            msg = self.modem.next_message()
+            if not msg:
+                return None
+            
+            if msg.startswith("+CMTI:"):
                 self.new_messages = True
+                continue
 
-            if line.startswith(str):
+            return msg
+
+    def wait_for(self, str="OK"):
+        timeout = time() + 1
+        while time() < timeout:
+            msg = self.next_message()
+            if not msg:
+                continue
+
+            log.info("read:%s" % msg)
+            if msg.startswith(str):
                 return True
+
+        log.info("wait timeout")
+        return False
 
     def handle_telegram_message(self, msg):
         p = re.compile('^6[0-9]{8}:')
         m = p.match(msg)
         if m:
-            logging.info("T>" + msg)
+            log.info("T>" + msg)
             out = 'AT+CMGS="+34' + m.group()[:-1] + '"\n'
             self.ser.write(out.encode('utf-8'))
             self.wait_for(">")
             out = ('%s' % msg[11:]) + chr(26)
             self.ser.write(out.encode('utf-8'))
-            logging.info("T> sent")
+            log.info("T> sent")
         else:
             # TODO: Split messages 
-            bot.sendMessage(config.CHAT_ID, text="You suck. Invalid message format, yo! Use <ES mobile number>: <message>")
-            bot.sendMessage(config.CHAT_ID, text="you said: '%s'" % msg)
+            if msg != "/start":
+                bot.sendMessage(config.CHAT_ID, text="You suck. Invalid message format, yo! Use <ES mobile number>: <message>")
+                bot.sendMessage(config.CHAT_ID, text="you said: '%s'" % msg)
 
     def run(self):
+        self.modem.start()
+
+        self.send_message("ATE0")
+        self.wait_for()
+
+        self.send_message('AT+CMGF=1')
+        self.wait_for()
+
+        self.send_message('AT+CMGL="ALL"')
+        self.wait_for()
+        log.info("OK!")
+
+    def crappy_crap(self):
+
         next_id = None
         line = ""
         while True:
-            ch = self.ser.read(1)
-            if ch == '\n':
-                if line.startswith("+CMTI:"):
-                    self.new_messages = True
-                logging.info("l>%s" % line)
-                line = ""
-                continue
-
-            if ch:
-                line += ch
 
             # If we haven't started receiving a line (idle), do event loop stuff
             if not line:
@@ -161,9 +221,10 @@ class SMS(object):
                     next_id = u.update_id + 1
 
 logging.basicConfig(filename=os.path.join(os.path.dirname(os.path.realpath(__file__)), 'gateway.log'),level=logging.INFO)
+log = logging
 
 sms = SMS()
-if not sms.open():
+if not sms.modem.open(MODEM_DEVICE, BAUD_RATE):
     sys.exit(-1)
 
 bot = telegram.Bot(token=config.ACCESS_TOKEN)
@@ -172,6 +233,11 @@ logging.info("Logged in as %s." % bot.first_name)
 bot.sendMessage(chat_id=config.CHAT_ID, text="mayhem sms gateway bot at your service!")
 sms.set_bot(bot)
 
-sms.process_messages()
-sms.run()
+logging.info("Modem ready for communication!")
+try:
+    sms.run()
+except KeyboardInterrupt:
+    print "keyboard interrupt"
+    pass
 
+sms.modem.stop()
