@@ -79,7 +79,7 @@ class SMS(object):
 
     def __init__(self):
         self.modem = SMSModem()
-        self.new_messages = False
+        self.new_messages = True
 
     def set_bot(self, bot):
         self.bot = bot
@@ -110,6 +110,7 @@ class SMS(object):
                 return None
             
             if msg.startswith("+CMTI:"):
+                log.info("new message!")
                 self.new_messages = True
                 continue
 
@@ -125,6 +126,9 @@ class SMS(object):
             log.info("read:%s" % msg)
             if msg.startswith(str):
                 return True
+
+            if msg.startswith("ERROR"):
+                return False
 
         log.info("wait timeout")
         return False
@@ -147,6 +151,7 @@ class SMS(object):
                 bot.sendMessage(config.CHAT_ID, text="you said: '%s'" % msg)
 
     def run(self):
+        # TODO: add error handling
         self.modem.start()
 
         self.send_message("ATE0")
@@ -177,6 +182,8 @@ class SMS(object):
                 if not msg:
                     continue
 
+                log.info("read:%s" % msg)
+
                 if msg.startswith("+CMGL:"):
                     data = msg.split(',')
                     cmd, index = data[0].split(' ')
@@ -187,7 +194,7 @@ class SMS(object):
 
                     try:
                         bot.sendMessage(chat_id=config.CHAT_ID, text="%s @ %s\n%s" % (sender, dt, msg))
-                        stored_cmds.append('AT+CMGD=%s\n' % index)
+                        stored_cmds.append('AT+CMGD=%s' % index)
                     except telegram.TelegramError as e:
                         log.error("Cannot send message to telegram." + str(e))
 
@@ -209,7 +216,8 @@ if not sms.modem.open(MODEM_DEVICE, BAUD_RATE):
 bot = telegram.Bot(token=config.ACCESS_TOKEN)
 logging.info("Logged in as %s." % bot.first_name)
 
-bot.sendMessage(chat_id=config.CHAT_ID, text="mayhem sms gateway bot at your service!")
+# TODO: re-add this
+#bot.sendMessage(chat_id=config.CHAT_ID, text="mayhem sms gateway bot at your service!")
 sms.set_bot(bot)
 
 logging.info("Modem ready for communication!")
