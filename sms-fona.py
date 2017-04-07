@@ -10,6 +10,7 @@ import telegram
 from time import sleep, time
 import config
 from Queue import Queue, Empty
+from urllib2 import HTTPError
 
 #TODO: If a message cannot be relayed, email results.
 
@@ -109,6 +110,7 @@ class SMS(object):
             if not msg:
                 return None
             
+            log.info("next:%s" % msg)
             if msg.startswith("+CMTI:"):
                 log.info("new message!")
                 self.new_messages = True
@@ -144,7 +146,7 @@ class SMS(object):
             self.wait_for(">")
             out = ('%s' % msg[14:]) + chr(26)
             self.send_message(out.encode('utf-8'))
-            log.info("T> sent")
+            log.info("T> '%s' sent" % out.encode('utf-8'))
         else:
             if msg != "/start":
                 bot.sendMessage(config.CHAT_ID, text="You suck. Invalid message format, yo! Use <ES mobile number>: <message>")
@@ -160,14 +162,26 @@ class SMS(object):
         self.send_message('AT+CMGF=1')
         self.wait_for()
 
+        self.send_message('AT+CNMI=2,2,0,0,0')
+        self.wait_for()
+
         next_id = None
         while True:
             try:
                 updates = bot.getUpdates(offset=next_id)
             except telegram.TelegramError as e:
-                log.error("Telegram error: ", str(e))
+                log.error("Telegram error: %s" % str(e))
+                sleep(3)
+                continue
             except Exception as e:
-                log.error("general error: ", str(e))
+                log.error("general error: %s" % str(e))
+                sleep(3)
+                continue
+            except HTTPError as e:
+                log.error("http error: %s" % str(e))
+                sleep(3)
+                continue
+
             for u in updates:
                 self.handle_telegram_message(u.message.text)
                 next_id = u.update_id + 1
