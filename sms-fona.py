@@ -15,7 +15,7 @@ from urllib2 import HTTPError
 #TODO: If a message cannot be relayed, email results.
 
 MODEM_DEVICE = "/dev/ttyS0"
-BAUD_RATE = 115200
+BAUD_RATE = 19200
 
 class SMSModem(threading.Thread):
 
@@ -42,13 +42,16 @@ class SMSModem(threading.Thread):
 
     def next_message(self):
         try:
-            return self.in_q.get()
+            return self.in_q.get_nowait()
         except Empty:
             return None
 
-    def send_message(self, msg):
+    def send_message(self, msg, newline=True):
         log.info("write:%s" % msg)
-        self.ser.write(msg + "\n")
+        if newline:
+            self.ser.write(msg + "\n")
+        else:
+            self.ser.write(msg)
 
     def stop(self):
         self.exit = True
@@ -101,8 +104,8 @@ class SMS(object):
 
         return unicode(out)
 
-    def send_message(self, msg):
-        self.modem.send_message(msg)
+    def send_message(self, msg, newline=True):
+        self.modem.send_message(msg, newline)
 
     def next_message(self):
         while True:
@@ -118,8 +121,8 @@ class SMS(object):
 
             return msg
 
-    def wait_for(self, str="OK"):
-        timeout = time() + 1
+    def wait_for(self, str="OK", timeout=3):
+        timeout += time()
         while time() < timeout:
             msg = self.next_message()
             if not msg:
@@ -131,6 +134,8 @@ class SMS(object):
 
             if msg.startswith("ERROR"):
                 return False
+
+            log.info("waitfor got '%s'" % msg)
 
         log.info("wait timeout")
         return False
@@ -145,8 +150,11 @@ class SMS(object):
             self.send_message(out.encode('utf-8'))
             self.wait_for(">")
             out = ('%s' % msg[14:]) + chr(26)
-            self.send_message(out.encode('utf-8'))
-            log.info("T> '%s' sent" % out.encode('utf-8'))
+            self.send_message(out.encode('utf-8'), False)
+            if self.wait_for():
+                log.info("T>'%s' sent" % out.encode('utf-8'))
+            else:
+                log.info("T>message not sent")
         else:
             if msg != "/start":
                 bot.sendMessage(config.CHAT_ID, text="You suck. Invalid message format, yo! Use <ES mobile number>: <message>")
@@ -159,10 +167,8 @@ class SMS(object):
         self.send_message("ATE0")
         self.wait_for()
 
-        self.send_message('AT+CMGF=1')
-        self.wait_for()
 
-        self.send_message('AT+CNMI=2,2,0,0,0')
+        self.send_message('AT+CNMI=2,1,0,0,0')
         self.wait_for()
 
         next_id = None
@@ -189,6 +195,8 @@ class SMS(object):
             if not self.new_messages:
                 continue
 
+            self.send_message('AT+CMGF=1')
+            self.wait_for()
             self.send_message('AT+CMGL="ALL"')
             stored_cmds = []
             while True:
